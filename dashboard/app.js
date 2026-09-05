@@ -3,6 +3,12 @@
 // ml/train_model.py from real held-out test-set predictions. Nothing here
 // invents a metric — the slider just looks up the precomputed sweep row
 // closest to the chosen threshold.
+//
+// Resilience note: every DOM-rendering section below runs independently.
+// Chart.js is loaded from a local vendored file (chart.umd.min.js) rather
+// than a CDN, and both chart calls are wrapped in try/catch, so a charting
+// failure can never blank out the queue, the health numbers, or anything
+// else on the page.
 
 const DATA = RETURN_GUARD_DATA;
 const CURRENCY = DATA.metrics.assumptions.currency === "INR" ? "\u20B9" : "$";
@@ -14,7 +20,17 @@ function fmtMoney(n) {
 }
 function fmtPct(n) { return `${Math.round(n * 100)}%`; }
 
-// ---------------- Tabs ----------------
+function nearestSweepRow(threshold) {
+  let best = DATA.sweep[0];
+  let bestDiff = Infinity;
+  for (const row of DATA.sweep) {
+    const diff = Math.abs(row.threshold - threshold);
+    if (diff < bestDiff) { bestDiff = diff; best = row; }
+  }
+  return best;
+}
+
+// ================= Tabs =================
 document.querySelectorAll(".tab").forEach(btn => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach(b => { b.classList.remove("active"); b.setAttribute("aria-selected", "false"); });
@@ -25,22 +41,12 @@ document.querySelectorAll(".tab").forEach(btn => {
   });
 });
 
-// ---------------- Header meta ----------------
+// ================= Header meta =================
 document.getElementById("test-set-size").textContent = DATA.metrics.n_test.toLocaleString("en-IN");
 
-// ---------------- Impact Simulator ----------------
+// ================= Impact Simulator (numbers only, no chart) =================
 const slider = document.getElementById("threshold-slider");
 slider.value = DATA.metrics.default_threshold;
-
-function nearestSweepRow(threshold) {
-  let best = DATA.sweep[0];
-  let bestDiff = Infinity;
-  for (const row of DATA.sweep) {
-    const diff = Math.abs(row.threshold - threshold);
-    if (diff < bestDiff) { bestDiff = diff; best = row; }
-  }
-  return best;
-}
 
 function renderSimulator(threshold) {
   const row = nearestSweepRow(threshold);
@@ -62,65 +68,17 @@ function renderSimulator(threshold) {
   document.getElementById("impact-missed").textContent = fmtMoney(row.loss_missed);
 
   if (window.curveChart) {
-    window.curveChart.data.datasets[1].data = [{ x: row.threshold, y: row.net_impact }];
-    window.curveChart.update("none");
+    try {
+      window.curveChart.data.datasets[1].data = [{ x: row.threshold, y: row.net_impact }];
+      window.curveChart.update("none");
+    } catch (e) { console.warn("Curve chart update skipped:", e); }
   }
 }
 
 slider.addEventListener("input", () => renderSimulator(parseFloat(slider.value)));
-
-// ---------------- Net-impact curve chart ----------------
-const ctx = document.getElementById("curve-chart").getContext("2d");
-window.curveChart = new Chart(ctx, {
-  type: "line",
-  data: {
-    datasets: [
-      {
-        label: "Net impact",
-        data: DATA.sweep.map(r => ({ x: r.threshold, y: r.net_impact })),
-        borderColor: "#5b8def",
-        backgroundColor: "rgba(91,141,239,0.08)",
-        borderWidth: 2,
-        pointRadius: 0,
-        fill: true,
-        tension: 0.25,
-      },
-      {
-        label: "Current threshold",
-        data: [],
-        type: "scatter",
-        backgroundColor: "#eaedf3",
-        borderColor: "#12161c",
-        borderWidth: 2,
-        pointRadius: 6,
-        pointHoverRadius: 7,
-      },
-    ],
-  },
-  options: {
-    responsive: true,
-    interaction: { intersect: false },
-    plugins: { legend: { display: false } },
-    scales: {
-      x: {
-        type: "linear",
-        min: 0.05, max: 0.95,
-        ticks: { color: "#8b95a8", callback: v => Math.round(v * 100) + "%" },
-        grid: { color: "#232a36" },
-        title: { display: true, text: "Threshold", color: "#8b95a8" },
-      },
-      y: {
-        ticks: { color: "#8b95a8", callback: v => (v / 1000).toFixed(0) + "k" },
-        grid: { color: "#232a36" },
-        title: { display: true, text: `Net impact (${CURRENCY})`, color: "#8b95a8" },
-      },
-    },
-  },
-});
-
 renderSimulator(parseFloat(slider.value));
 
-// ---------------- Assumptions ----------------
+// ================= Assumptions =================
 const A = DATA.metrics.assumptions;
 document.getElementById("assumptions-grid").innerHTML = `
   <div class="assumption-item"><div class="a-label">Cost of a missed/caught return</div><div class="a-value">${Math.round(A.return_loss_fraction * 100)}% of order value</div></div>
@@ -129,32 +87,8 @@ document.getElementById("assumptions-grid").innerHTML = `
   <div class="assumption-item"><div class="a-label">Currency</div><div class="a-value">${A.currency}</div></div>
 `;
 
-// ---------------- Risk Queue ----------------
+// ================= Risk Queue =================
 let activeBand = "ALL";
-
-function renderQueue() {
-  const list = document.getElementById("queue-list");
-  const rows = DATA.orders.filter(o => activeBand === "ALL" || o.risk_band === activeBand);
-  list.innerHTML = rows.map(o => orderRowHTML(o)).join("");
-
-  list.querySelectorAll(".order-row").forEach(rowEl => {
-    rowEl.addEventListener("click", (e) => {
-      if (e.target.closest(".decision-btn")) return;
-      rowEl.classList.toggle("expanded");
-    });
-    rowEl.querySelectorAll(".decision-btn").forEach(btn => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const orderId = rowEl.dataset.orderId;
-        decisions[orderId] = btn.dataset.decision;
-        rowEl.querySelectorAll(".decision-btn").forEach(b => b.classList.remove("chosen"));
-        btn.classList.add("chosen");
-        const note = rowEl.querySelector(".logged-note");
-        if (note) note.textContent = `Logged: ${btn.dataset.decision} — order #${orderId}`;
-      });
-    });
-  });
-}
 
 function orderRowHTML(o) {
   const chosen = decisions[o.order_id];
@@ -200,6 +134,30 @@ function orderRowHTML(o) {
     </div>`;
 }
 
+function renderQueue() {
+  const list = document.getElementById("queue-list");
+  const rows = DATA.orders.filter(o => activeBand === "ALL" || o.risk_band === activeBand);
+  list.innerHTML = rows.map(o => orderRowHTML(o)).join("");
+
+  list.querySelectorAll(".order-row").forEach(rowEl => {
+    rowEl.addEventListener("click", (e) => {
+      if (e.target.closest(".decision-btn")) return;
+      rowEl.classList.toggle("expanded");
+    });
+    rowEl.querySelectorAll(".decision-btn").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const orderId = rowEl.dataset.orderId;
+        decisions[orderId] = btn.dataset.decision;
+        rowEl.querySelectorAll(".decision-btn").forEach(b => b.classList.remove("chosen"));
+        btn.classList.add("chosen");
+        const note = rowEl.querySelector(".logged-note");
+        if (note) note.textContent = `Logged: ${btn.dataset.decision} — order #${orderId}`;
+      });
+    });
+  });
+}
+
 document.querySelectorAll(".band-chip").forEach(chip => {
   chip.addEventListener("click", () => {
     document.querySelectorAll(".band-chip").forEach(c => c.classList.remove("active"));
@@ -211,7 +169,7 @@ document.querySelectorAll(".band-chip").forEach(chip => {
 
 renderQueue();
 
-// ---------------- Model Health ----------------
+// ================= Model Health (text + confusion matrix, no chart) =================
 const M = DATA.metrics;
 document.getElementById("health-split").textContent = `${M.n_train.toLocaleString("en-IN")} / ${M.n_test.toLocaleString("en-IN")}`;
 document.getElementById("health-auc").textContent = M.roc_auc.toFixed(3);
@@ -233,26 +191,91 @@ document.getElementById("confusion-matrix").innerHTML = `
   <div class="cm-cell cm-correct"><div class="cm-num">${defaultRow.tn}</div><div class="cm-tag">true negative</div></div>
 `;
 
-const impCtx = document.getElementById("importance-chart").getContext("2d");
-const topImp = DATA.feature_importance.slice(0, 8);
-new Chart(impCtx, {
-  type: "bar",
-  data: {
-    labels: topImp.map(f => f.feature),
-    datasets: [{
-      data: topImp.map(f => f.importance),
-      backgroundColor: "#5b8def",
-      borderRadius: 4,
-      barThickness: 16,
-    }],
-  },
-  options: {
-    indexAxis: "y",
-    responsive: true,
-    plugins: { legend: { display: false } },
-    scales: {
-      x: { ticks: { color: "#8b95a8" }, grid: { color: "#232a36" } },
-      y: { ticks: { color: "#c3c9d4", font: { size: 11 } }, grid: { display: false } },
+// ================= Charts (isolated — failures here can't affect anything above) =================
+try {
+  if (typeof Chart === "undefined") throw new Error("Chart.js did not load (chart.umd.min.js missing or blocked)");
+
+  const ctx = document.getElementById("curve-chart").getContext("2d");
+  window.curveChart = new Chart(ctx, {
+    type: "line",
+    data: {
+      datasets: [
+        {
+          label: "Net impact",
+          data: DATA.sweep.map(r => ({ x: r.threshold, y: r.net_impact })),
+          borderColor: "#5b8def",
+          backgroundColor: "rgba(91,141,239,0.08)",
+          borderWidth: 2,
+          pointRadius: 0,
+          fill: true,
+          tension: 0.25,
+        },
+        {
+          label: "Current threshold",
+          data: [{ x: parseFloat(slider.value), y: nearestSweepRow(parseFloat(slider.value)).net_impact }],
+          type: "scatter",
+          backgroundColor: "#eaedf3",
+          borderColor: "#12161c",
+          borderWidth: 2,
+          pointRadius: 6,
+          pointHoverRadius: 7,
+        },
+      ],
     },
-  },
-});
+    options: {
+      responsive: true,
+      interaction: { intersect: false },
+      plugins: { legend: { display: false } },
+      scales: {
+        x: {
+          type: "linear",
+          min: 0.05, max: 0.95,
+          ticks: { color: "#8b95a8", callback: v => Math.round(v * 100) + "%" },
+          grid: { color: "#232a36" },
+          title: { display: true, text: "Threshold", color: "#8b95a8" },
+        },
+        y: {
+          ticks: { color: "#8b95a8", callback: v => (v / 1000).toFixed(0) + "k" },
+          grid: { color: "#232a36" },
+          title: { display: true, text: `Net impact (${CURRENCY})`, color: "#8b95a8" },
+        },
+      },
+    },
+  });
+} catch (e) {
+  console.warn("Net-impact curve chart could not render:", e);
+  const el = document.getElementById("curve-chart");
+  if (el) el.outerHTML = `<p class="muted">Chart unavailable (${e.message}). The numbers above are still live and correct.</p>`;
+}
+
+try {
+  if (typeof Chart === "undefined") throw new Error("Chart.js did not load (chart.umd.min.js missing or blocked)");
+
+  const impCtx = document.getElementById("importance-chart").getContext("2d");
+  const topImp = DATA.feature_importance.slice(0, 8);
+  new Chart(impCtx, {
+    type: "bar",
+    data: {
+      labels: topImp.map(f => f.feature),
+      datasets: [{
+        data: topImp.map(f => f.importance),
+        backgroundColor: "#5b8def",
+        borderRadius: 4,
+        barThickness: 16,
+      }],
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: "#8b95a8" }, grid: { color: "#232a36" } },
+        y: { ticks: { color: "#c3c9d4", font: { size: 11 } }, grid: { display: false } },
+      },
+    },
+  });
+} catch (e) {
+  console.warn("Feature importance chart could not render:", e);
+  const el = document.getElementById("importance-chart");
+  if (el) el.outerHTML = `<p class="muted">Chart unavailable (${e.message}).</p>`;
+}
