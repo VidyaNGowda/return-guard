@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Return Guard — Return-Risk Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="wordmark">
+      <span class="wordmark-mark" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+          <path d="M12 2L4 5.5V11C4 16.2 7.4 20.9 12 22C16.6 20.9 20 16.2 20 11V5.5L12 2Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+          <path d="M8.5 12L11 14.5L15.5 9.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </span>
+      Return Guard
+    </div>
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button class="tab active" data-tab="overview" role="tab" aria-selected="true">Impact Simulator</button>
+      <button class="tab" data-tab="queue" role="tab" aria-selected="false">Risk Queue</button>
+      <button class="tab" data-tab="health" role="tab" aria-selected="false">Model Health</button>
+    </nav>
+    <div class="topbar-meta">Held-out test set · <span id="test-set-size">—</span> orders</div>
+  </div>
+</header>
+
+<main class="content">
+
+  <!-- ===================== OVERVIEW / IMPACT SIMULATOR ===================== -->
+  <section id="panel-overview" class="panel active">
+
+    <div class="hero">
+      <div class="hero-label">Net financial impact at current threshold</div>
+      <div class="hero-number" id="hero-net-impact">₹0</div>
+      <div class="hero-sub">Loss prevented, minus false-positive friction, minus review cost — recomputed live on the held-out test set as you move the slider.</div>
+    </div>
+
+    <div class="simulator card">
+      <div class="simulator-head">
+        <div>
+          <h2>Flag orders when risk score ≥</h2>
+          <p class="muted">Move the threshold to see the precision / recall / cost trade-off a merchant actually faces.</p>
+        </div>
+        <div class="threshold-readout" id="threshold-readout">21%</div>
+      </div>
+
+      <input type="range" id="threshold-slider" min="0.05" max="0.95" step="0.01" value="0.21" aria-label="Risk threshold">
+      <div class="slider-scale"><span>5%</span><span>50%</span><span>95%</span></div>
+
+      <div class="sim-grid">
+        <div class="sim-stat">
+          <div class="sim-stat-label">Precision</div>
+          <div class="sim-stat-value" id="stat-precision">—</div>
+          <div class="sim-stat-note">of flagged orders that truly return</div>
+        </div>
+        <div class="sim-stat">
+          <div class="sim-stat-label">Recall</div>
+          <div class="sim-stat-value" id="stat-recall">—</div>
+          <div class="sim-stat-note">of real returns caught before they ship</div>
+        </div>
+        <div class="sim-stat">
+          <div class="sim-stat-label">F1</div>
+          <div class="sim-stat-value" id="stat-f1">—</div>
+          <div class="sim-stat-note">balance of precision and recall</div>
+        </div>
+        <div class="sim-stat">
+          <div class="sim-stat-label">Orders flagged</div>
+          <div class="sim-stat-value" id="stat-flagged">—</div>
+          <div class="sim-stat-note">of <span id="stat-flagged-total">—</span> in the test set</div>
+        </div>
+      </div>
+
+      <div class="impact-breakdown">
+        <div class="impact-row">
+          <span class="impact-dot dot-good"></span>
+          <span class="impact-label">Return loss prevented</span>
+          <span class="impact-value" id="impact-prevented">₹0</span>
+        </div>
+        <div class="impact-row">
+          <span class="impact-dot dot-bad"></span>
+          <span class="impact-label">False-positive friction cost</span>
+          <span class="impact-value" id="impact-fp">−₹0</span>
+        </div>
+        <div class="impact-row">
+          <span class="impact-dot dot-neutral"></span>
+          <span class="impact-label">Manual review cost</span>
+          <span class="impact-value" id="impact-review">−₹0</span>
+        </div>
+        <div class="impact-row">
+          <span class="impact-dot dot-warn"></span>
+          <span class="impact-label">Return loss still missed</span>
+          <span class="impact-value" id="impact-missed">₹0</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card curve-card">
+      <h3>Net impact across every possible threshold</h3>
+      <p class="muted">This is the full sweep — not a cherry-picked point. The marker shows where your slider sits.</p>
+      <canvas id="curve-chart" height="90"></canvas>
+    </div>
+
+    <div class="assumptions card">
+      <h3>Declared assumptions</h3>
+      <p class="muted">Stated up front, not hidden in the model — change these constants in <code>train_model.py</code> to match a real merchant's numbers.</p>
+      <div class="assumptions-grid" id="assumptions-grid"></div>
+    </div>
+  </section>
+
+  <!-- ===================== RISK QUEUE ===================== -->
+  <section id="panel-queue" class="panel">
+    <div class="queue-head">
+      <div>
+        <h2>Merchant review queue</h2>
+        <p class="muted">Return Guard never blocks an order automatically. It ranks, explains, and hands the decision to a human.</p>
+      </div>
+      <div class="band-filters" id="band-filters">
+        <button class="band-chip active" data-band="ALL">All</button>
+        <button class="band-chip" data-band="CRITICAL">Critical</button>
+        <button class="band-chip" data-band="HIGH">High</button>
+        <button class="band-chip" data-band="MEDIUM">Medium</button>
+        <button class="band-chip" data-band="LOW">Low</button>
+      </div>
+    </div>
+
+    <div class="queue-list" id="queue-list"></div>
+  </section>
+
+  <!-- ===================== MODEL HEALTH ===================== -->
+  <section id="panel-health" class="panel">
+    <h2>Model health</h2>
+    <p class="muted">Reported on the 20% held-out test set, which the model never saw during training or tuning.</p>
+
+    <div class="health-grid">
+      <div class="card health-card">
+        <div class="health-metric-label">Train / test split</div>
+        <div class="health-metric-value" id="health-split">—</div>
+      </div>
+      <div class="card health-card">
+        <div class="health-metric-label">ROC-AUC</div>
+        <div class="health-metric-value" id="health-auc">—</div>
+      </div>
+      <div class="card health-card">
+        <div class="health-metric-label">Test-set return rate</div>
+        <div class="health-metric-value" id="health-base-rate">—</div>
+      </div>
+      <div class="card health-card">
+        <div class="health-metric-label">Default operating threshold</div>
+        <div class="health-metric-value" id="health-threshold">—</div>
+      </div>
+    </div>
+
+    <div class="health-two-col">
+      <div class="card">
+        <h3>Confusion matrix at default threshold</h3>
+        <div class="confusion-matrix" id="confusion-matrix"></div>
+      </div>
+      <div class="card">
+        <h3>Top model drivers</h3>
+        <p class="muted">Feature importance across the whole model, not one order.</p>
+        <canvas id="importance-chart" height="220"></canvas>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  Return Guard — Engine 1 of a four-engine risk platform. Fraud-spike detection, abuse-ring graph analysis and chargeback evidence response follow the same detect → explain → quantify → human-decide pattern, scoped out of this build so every number shown here is real.
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
